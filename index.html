@@ -202,7 +202,7 @@
     </div>
   </div>
 
-  <!-- 하단 백업 및 복원 (문구 삭제 완료) -->
+  <!-- 하단 백업 및 복원 -->
   <footer class="max-w-4xl mx-auto px-6 mt-16 pt-6 border-t border-neutral-200/60 flex justify-end items-center text-[11px] text-neutral-400 gap-3">
     <button onclick="exportData()" class="hover:text-neutral-800 transition underline underline-offset-2">
       데이터 백업
@@ -214,14 +214,95 @@
     </label>
   </footer>
 
-  <script>
-    let records = JSON.parse(localStorage.getItem('arilee_records')) || [];
+  <!-- Firebase 및 메인 로직 스크립트 -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { 
+      getFirestore, 
+      collection, 
+      doc, 
+      setDoc, 
+      deleteDoc, 
+      onSnapshot 
+    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyC2Khungaq6leXSLKyGqS169iad0-kBQvQ",
+      authDomain: "arilee-5797e.firebaseapp.com",
+      projectId: "arilee-5797e",
+      storageBucket: "arilee-5797e.firebasestorage.app",
+      messagingSenderId: "442713986797",
+      appId: "1:442713986797:web:c6b9e632d31ccf27e21ee4"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const recordsCol = collection(db, "records");
+
+    let records = [];
     let currentCategory = '전체';
     let isSearchOpen = false;
     let currentView = 'grid';
     let calendarDate = new Date();
 
-    function exportData() {
+    // Firestore 실시간 동기화 감지
+    onSnapshot(recordsCol, (snapshot) => {
+      records = [];
+      snapshot.forEach((docSnap) => {
+        records.push(docSnap.data());
+      });
+      handleFilterAndSort();
+    }, (error) => {
+      console.error("데이터 동기화 실패:", error);
+      alert("데이터베이스 연결에 문제가 발생했습니다. 파이어베이스 규칙을 확인해주세요.");
+    });
+
+    // 폼 저장 (생성/수정)
+    document.getElementById('record-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const submitBtn = document.getElementById('submit-btn');
+      submitBtn.disabled = true;
+      submitBtn.innerText = '저장 중...';
+
+      const editId = document.getElementById('edit-id').value;
+      const id = editId ? Number(editId) : Date.now();
+
+      const recordData = {
+        id: id,
+        category: document.getElementById('input-category').value,
+        title: document.getElementById('input-title').value,
+        date: document.getElementById('input-date').value,
+        rating: document.getElementById('input-rating').value,
+        comment: document.getElementById('input-comment').value,
+        image: document.getElementById('input-imageData').value
+      };
+
+      try {
+        await setDoc(doc(db, "records", String(id)), recordData);
+        closeModal();
+      } catch (err) {
+        console.error(err);
+        alert('저장에 실패했습니다. 관리자 설정을 확인하세요.');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerText = '완료';
+      }
+    });
+
+    // 삭제 기능
+    window.deleteRecord = async function(id) {
+      if (!confirm('이 기록을 삭제할까요?')) return;
+      try {
+        await deleteDoc(doc(db, "records", String(id)));
+        closeDetailModal();
+      } catch (err) {
+        console.error(err);
+        alert('삭제에 실패했습니다.');
+      }
+    };
+
+    // 데이터 백업 (JSON 다운로드)
+    window.exportData = function() {
       if (records.length === 0) {
         alert('백업할 기록이 없습니다.');
         return;
@@ -234,35 +315,39 @@
       document.body.appendChild(downloadAnchor);
       downloadAnchor.click();
       downloadAnchor.remove();
-    }
+    };
 
-    function importData(input) {
+    // 데이터 복원 (JSON 업로드 후 Firestore에 일괄 저장)
+    window.importData = function(input) {
       const file = input.files[0];
       if (!file) return;
 
       const reader = new FileReader();
-      reader.onload = function(e) {
+      reader.onload = async function(e) {
         try {
           const imported = JSON.parse(e.target.result);
           if (Array.isArray(imported)) {
-            if (confirm(`기존 기록을 백업 파일의 ${imported.length}개 기록으로 복원하시겠습니까?`)) {
-              records = imported;
-              saveRecords();
-              handleFilterAndSort();
+            if (confirm(`백업 파일의 ${imported.length}개 기록을 데이터베이스로 복원하시겠습니까?`)) {
+              for (const item of imported) {
+                const docId = String(item.id || Date.now() + Math.random());
+                await setDoc(doc(db, "records", docId), item);
+              }
               alert('복원이 완료되었습니다.');
             }
           } else {
             alert('올바른 백업 파일 형식이 아닙니다.');
           }
         } catch (err) {
+          console.error(err);
           alert('파일을 읽는 중 오류가 발생했습니다.');
         }
       };
       reader.readAsText(file);
       input.value = '';
-    }
+    };
 
-    function setViewMode(mode) {
+    // UI 제어 함수 바인딩
+    window.setViewMode = function(mode) {
       currentView = mode;
       const gridBtn = document.getElementById('view-btn-grid');
       const calBtn = document.getElementById('view-btn-calendar');
@@ -284,18 +369,18 @@
         sortWrapper.classList.add('hidden');
       }
       handleFilterAndSort();
-    }
+    };
 
-    function changeMonth(delta) {
+    window.changeMonth = function(delta) {
       if (delta === 0) {
         calendarDate = new Date();
       } else {
         calendarDate.setMonth(calendarDate.getMonth() + delta);
       }
       renderCalendar(getFilteredData());
-    }
+    };
 
-    function toggleSearchInput() {
+    window.toggleSearchInput = function() {
       const input = document.getElementById('search-input');
       isSearchOpen = !isSearchOpen;
       if (isSearchOpen) {
@@ -308,153 +393,9 @@
           input.classList.remove('w-44', 'opacity-100');
         }
       }
-    }
+    };
 
-    function processAndPreviewImage(file) {
-      const reader = new FileReader();
-      reader.onload = function (event) {
-        const img = new Image();
-        img.onload = function () {
-          const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 600;
-          let width = img.width;
-          let height = img.height;
-
-          if (width > MAX_WIDTH) {
-            height = Math.round((height * MAX_WIDTH) / width);
-            width = MAX_WIDTH;
-          }
-
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, width, height);
-
-          const compressed = canvas.toDataURL('image/jpeg', 0.82);
-          document.getElementById('input-imageData').value = compressed;
-          setImagePreview(compressed);
-        };
-        img.src = event.target.result;
-      };
-      reader.readAsDataURL(file);
-    }
-
-    function setImagePreview(src) {
-      const preview = document.getElementById('preview-image');
-      preview.src = src;
-      preview.classList.remove('hidden');
-      document.getElementById('upload-placeholder').classList.add('hidden');
-    }
-
-    function handleFileSelect(input) {
-      if (input.files && input.files[0]) {
-        processAndPreviewImage(input.files[0]);
-      }
-    }
-
-    window.addEventListener('paste', function (e) {
-      const modal = document.getElementById('modal');
-      if (modal.classList.contains('hidden')) return;
-
-      const items = (e.clipboardData || window.clipboardData).items;
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.indexOf('image') !== -1) {
-          const file = items[i].getAsFile();
-          processAndPreviewImage(file);
-          break;
-        }
-      }
-    });
-
-    function getTodayString() {
-      const today = new Date();
-      const year = today.getFullYear();
-      const month = String(today.getMonth() + 1).padStart(2, '0');
-      const day = String(today.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    }
-
-    function openCreateModal(datePreset) {
-      document.getElementById('record-form').reset();
-      document.getElementById('edit-id').value = '';
-      document.getElementById('modal-title').innerText = '새 기록 작성';
-      document.getElementById('submit-btn').innerText = '완료';
-      document.getElementById('input-imageData').value = '';
-      document.getElementById('preview-image').src = '';
-      document.getElementById('preview-image').classList.add('hidden');
-      document.getElementById('upload-placeholder').classList.remove('hidden');
-      document.getElementById('input-date').value = datePreset || getTodayString();
-      document.getElementById('modal').classList.remove('hidden');
-    }
-
-    function openEditModal(id) {
-      const target = records.find(item => item.id === id);
-      if (!target) return;
-
-      closeDetailModal();
-      document.getElementById('modal-title').innerText = '기록 수정';
-      document.getElementById('submit-btn').innerText = '완료';
-      document.getElementById('edit-id').value = target.id;
-      document.getElementById('input-category').value = target.category;
-      document.getElementById('input-title').value = target.title;
-      document.getElementById('input-date').value = target.date;
-      document.getElementById('input-rating').value = target.rating;
-      document.getElementById('input-comment').value = target.comment || '';
-      document.getElementById('input-imageData').value = target.image || '';
-
-      if (target.image) {
-        setImagePreview(target.image);
-      } else {
-        document.getElementById('preview-image').src = '';
-        document.getElementById('preview-image').classList.add('hidden');
-        document.getElementById('upload-placeholder').classList.remove('hidden');
-      }
-
-      document.getElementById('modal').classList.remove('hidden');
-    }
-
-    function openDetailModal(id) {
-      const target = records.find(item => item.id === id);
-      if (!target) return;
-
-      const starText = '★'.repeat(Number(target.rating)) + '☆'.repeat(5 - Number(target.rating));
-      const container = document.getElementById('detail-content');
-
-      container.innerHTML = `
-        <div class="flex flex-col items-center text-center">
-          ${target.image 
-            ? `<div class="w-28 aspect-[3/4] rounded-lg overflow-hidden border border-neutral-200 mb-3 shadow-sm">
-                 <img src="${target.image}" class="w-full h-full object-cover">
-               </div>` 
-            : ''}
-          <span class="text-[10px] text-neutral-400 font-medium tracking-wide mb-0.5">${target.category}</span>
-          <h3 class="text-sm font-bold text-neutral-900 mb-1 leading-snug">${target.title}</h3>
-          <p class="text-amber-500 text-xs mb-3 font-serif">${starText}</p>
-          
-          <div class="w-full bg-neutral-50 rounded-xl p-3.5 border border-neutral-100 text-left mb-4">
-            <p class="text-[11px] font-medium text-neutral-400 mb-1">메모</p>
-            <p class="text-neutral-700 text-xs leading-relaxed whitespace-pre-wrap">${target.comment || '<span class="text-neutral-400">남겨진 메모가 없습니다.</span>'}</p>
-          </div>
-
-          <div class="w-full flex justify-between items-center text-[11px] text-neutral-400 pt-2 border-t border-neutral-100">
-            <span>${target.date}</span>
-            <button onclick="openEditModal(${target.id})" class="text-neutral-800 font-medium hover:underline">수정하기</button>
-          </div>
-        </div>
-      `;
-
-      document.getElementById('detail-modal').classList.remove('hidden');
-    }
-
-    function closeDetailModal() {
-      document.getElementById('detail-modal').classList.add('hidden');
-    }
-
-    function closeModal() {
-      document.getElementById('modal').classList.add('hidden');
-    }
-
-    function changeCategory(cat) {
+    window.changeCategory = function(cat) {
       currentCategory = cat;
       document.querySelectorAll('.filter-btn').forEach(btn => {
         if (btn.innerText === cat) {
@@ -464,22 +405,9 @@
         }
       });
       handleFilterAndSort();
-    }
+    };
 
-    function getFilteredData() {
-      const searchTerm = document.getElementById('search-input').value.trim().toLowerCase();
-
-      let filtered = currentCategory === '전체' 
-        ? [...records] 
-        : records.filter(item => item.category === currentCategory);
-
-      if (searchTerm) {
-        filtered = filtered.filter(item => item.title.toLowerCase().includes(searchTerm));
-      }
-      return filtered;
-    }
-
-    function handleFilterAndSort() {
+    window.handleFilterAndSort = function() {
       const filtered = getFilteredData();
 
       if (currentView === 'calendar') {
@@ -498,6 +426,19 @@
       });
 
       renderGrid(filtered);
+    };
+
+    function getFilteredData() {
+      const searchTerm = document.getElementById('search-input').value.trim().toLowerCase();
+
+      let filtered = currentCategory === '전체' 
+        ? [...records] 
+        : records.filter(item => item.category === currentCategory);
+
+      if (searchTerm) {
+        filtered = filtered.filter(item => item.title.toLowerCase().includes(searchTerm));
+      }
+      return filtered;
     }
 
     function renderGrid(dataList) {
@@ -525,7 +466,7 @@
         card.innerHTML = `
           <div class="w-full aspect-[3/4] rounded-xl overflow-hidden bg-neutral-100 border border-neutral-200/60 mb-2 relative shadow-sm">
             ${item.image 
-              ? `<img src="${item.image}" alt="${item.title}" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">`
+              ? `<img src="${item.image}" alt="${item.title}" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">` 
               : `<div class="w-full h-full flex flex-col items-center justify-center text-neutral-300 p-2 text-center">
                    <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 002-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
                    <span class="text-[10px]">No Poster</span>
@@ -612,49 +553,151 @@
       }
     }
 
-    function deleteRecord(id) {
-      if (!confirm('이 기록을 삭제할까요?')) return;
-      records = records.filter(item => item.id !== id);
-      saveRecords();
-      handleFilterAndSort();
-    }
+    // 모달 관리 함수들
+    window.openCreateModal = function(datePreset) {
+      document.getElementById('record-form').reset();
+      document.getElementById('edit-id').value = '';
+      document.getElementById('modal-title').innerText = '새 기록 작성';
+      document.getElementById('submit-btn').innerText = '완료';
+      document.getElementById('input-imageData').value = '';
+      document.getElementById('preview-image').src = '';
+      document.getElementById('preview-image').classList.add('hidden');
+      document.getElementById('upload-placeholder').classList.remove('hidden');
+      document.getElementById('input-date').value = datePreset || getTodayString();
+      document.getElementById('modal').classList.remove('hidden');
+    };
 
-    document.getElementById('record-form').addEventListener('submit', (e) => {
-      e.preventDefault();
-      
-      const editId = document.getElementById('edit-id').value;
-      const recordData = {
-        category: document.getElementById('input-category').value,
-        title: document.getElementById('input-title').value,
-        date: document.getElementById('input-date').value,
-        rating: document.getElementById('input-rating').value,
-        comment: document.getElementById('input-comment').value,
-        image: document.getElementById('input-imageData').value
-      };
+    window.openEditModal = function(id) {
+      const target = records.find(item => item.id === id);
+      if (!target) return;
 
-      if (editId) {
-        records = records.map(item => item.id === Number(editId) ? { ...item, ...recordData } : item);
+      closeDetailModal();
+      document.getElementById('modal-title').innerText = '기록 수정';
+      document.getElementById('submit-btn').innerText = '완료';
+      document.getElementById('edit-id').value = target.id;
+      document.getElementById('input-category').value = target.category;
+      document.getElementById('input-title').value = target.title;
+      document.getElementById('input-date').value = target.date;
+      document.getElementById('input-rating').value = target.rating;
+      document.getElementById('input-comment').value = target.comment || '';
+      document.getElementById('input-imageData').value = target.image || '';
+
+      if (target.image) {
+        setImagePreview(target.image);
       } else {
-        records.unshift({
-          id: Date.now(),
-          ...recordData
-        });
+        document.getElementById('preview-image').src = '';
+        document.getElementById('preview-image').classList.add('hidden');
+        document.getElementById('upload-placeholder').classList.remove('hidden');
       }
 
-      saveRecords();
-      closeModal();
-      handleFilterAndSort();
+      document.getElementById('modal').classList.remove('hidden');
+    };
+
+    window.openDetailModal = function(id) {
+      const target = records.find(item => item.id === id);
+      if (!target) return;
+
+      const starText = '★'.repeat(Number(target.rating)) + '☆'.repeat(5 - Number(target.rating));
+      const container = document.getElementById('detail-content');
+
+      container.innerHTML = `
+        <div class="flex flex-col items-center text-center">
+          ${target.image 
+            ? `<div class="w-28 aspect-[3/4] rounded-lg overflow-hidden border border-neutral-200 mb-3 shadow-sm">
+                 <img src="${target.image}" class="w-full h-full object-cover">
+               </div>` 
+            : ''}
+          <span class="text-[10px] text-neutral-400 font-medium tracking-wide mb-0.5">${target.category}</span>
+          <h3 class="text-sm font-bold text-neutral-900 mb-1 leading-snug">${target.title}</h3>
+          <p class="text-amber-500 text-xs mb-3 font-serif">${starText}</p>
+          
+          <div class="w-full bg-neutral-50 rounded-xl p-3.5 border border-neutral-100 text-left mb-4">
+            <p class="text-[11px] font-medium text-neutral-400 mb-1">메모</p>
+            <p class="text-neutral-700 text-xs leading-relaxed whitespace-pre-wrap">${target.comment || '<span class="text-neutral-400">남겨진 메모가 없습니다.</span>'}</p>
+          </div>
+
+          <div class="w-full flex justify-between items-center text-[11px] text-neutral-400 pt-2 border-t border-neutral-100">
+            <span>${target.date}</span>
+            <button onclick="openEditModal(${target.id})" class="text-neutral-800 font-medium hover:underline">수정하기</button>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('detail-modal').classList.remove('hidden');
+    };
+
+    window.closeDetailModal = function() {
+      document.getElementById('detail-modal').classList.add('hidden');
+    };
+
+    window.closeModal = function() {
+      document.getElementById('modal').classList.add('hidden');
+    };
+
+    // 이미지 처리 로직
+    window.processAndPreviewImage = function(file) {
+      const reader = new FileReader();
+      reader.onload = function (event) {
+        const img = new Image();
+        img.onload = function () {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 600;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > MAX_WIDTH) {
+            height = Math.round((height * MAX_WIDTH) / width);
+            width = MAX_WIDTH;
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+
+          const compressed = canvas.toDataURL('image/jpeg', 0.82);
+          document.getElementById('input-imageData').value = compressed;
+          setImagePreview(compressed);
+        };
+        img.src = event.target.result;
+      };
+      reader.readAsDataURL(file);
+    };
+
+    function setImagePreview(src) {
+      const preview = document.getElementById('preview-image');
+      preview.src = src;
+      preview.classList.remove('hidden');
+      document.getElementById('upload-placeholder').classList.add('hidden');
+    }
+
+    window.handleFileSelect = function(input) {
+      if (input.files && input.files[0]) {
+        processAndPreviewImage(input.files[0]);
+      }
+    };
+
+    window.addEventListener('paste', function (e) {
+      const modal = document.getElementById('modal');
+      if (modal.classList.contains('hidden')) return;
+
+      const items = (e.clipboardData || window.clipboardData).items;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+          const file = items[i].getAsFile();
+          processAndPreviewImage(file);
+          break;
+        }
+      }
     });
 
-    function saveRecords() {
-      try {
-        localStorage.setItem('arilee_records', JSON.stringify(records));
-      } catch (e) {
-        alert('저장 공간이 부족합니다. 하단의 [데이터 백업] 버튼을 눌러 파일로 저장해 두세요!');
-      }
+    function getTodayString() {
+      const today = new Date();
+      const year = today.getFullYear();
+      const month = String(today.getMonth() + 1).padStart(2, '0');
+      const day = String(today.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
     }
-
-    handleFilterAndSort();
   </script>
 </body>
 </html>
